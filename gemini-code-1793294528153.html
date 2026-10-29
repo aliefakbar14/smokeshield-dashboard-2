@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmokeShield-IoT | Telemetry & EWS SCADA System</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet GIS Map CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117;
+            color: #c9d1d9;
+        }
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .scada-panel {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+        }
+        .scada-header {
+            background-color: #21262d;
+            border-bottom: 1px solid #30363d;
+        }
+        /* Custom Leaflet Dark SCADA Tile Adjustment */
+        .leaflet-tile-pane {
+            filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
+        }
+        /* Alarm Radar Pulse */
+        @keyframes pulse-red {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1.15); box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .alarm-active {
+            animation: pulse-red 1.2s infinite;
+        }
+    </style>
+</head>
+<body class="p-3 text-xs leading-relaxed">
+
+    <!-- Top Status Header -->
+    <header class="scada-panel mb-3 p-3 flex flex-wrap justify-between items-center gap-3">
+        <div class="flex items-center space-x-3">
+            <div class="w-3 h-3 rounded-full bg-emerald-500 animate-ping" id="status-indicator"></div>
+            <div>
+                <h1 class="text-sm font-bold tracking-wider text-slate-100 uppercase mono">SMOKESHIELD-IOT // SCADA CONTROL ROOM</h1>
+                <p class="text-slate-400 text-[11px]">Tim Tidur Nyenyak &bull; ITK Balikpapan &bull; MQTT Broker: <span class="mono text-slate-200">mqtt.smokeshield.itk.ac.id:1883</span></p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <button id="btn-audio" onclick="toggleAudio()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-slate-200 font-semibold flex items-center space-x-1.5">
+                <i class="fa-solid fa-volume-high text-amber-400"></i>
+                <span>Aktifkan Audio Sirine</span>
+            </button>
+            <button id="btn-fire-sim" onclick="triggerFireSimulation('Titik A')" class="px-3 py-1.5 bg-red-900/40 border border-red-600/80 hover:bg-red-800/60 text-red-200 font-bold rounded flex items-center space-x-1.5">
+                <i class="fa-solid fa-fire"></i>
+                <span>SIMULASI KEBAKARAN (TITIK A)</span>
+            </button>
+            <button onclick="resetSystem()" class="px-3 py-1.5 bg-slate-800 border border-slate-600 hover:bg-slate-700 text-slate-300 rounded">
+                Reset Normal
+            </button>
+        </div>
+    </header>
+
+    <!-- Emergency Banner (Hidden by default) -->
+    <div id="alarm-banner" class="hidden mb-3 p-3 bg-red-950 border border-red-600 text-red-100 flex justify-between items-center rounded alarm-active">
+        <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-triangle-exclamation text-2xl text-red-500"></i>
+            <div>
+                <div class="font-bold text-sm tracking-wider uppercase">PERINGATAN BAHAYA KRITIS: DETEKSI KEBAKARAN DI TITIK A (KARANG JOANG)</div>
+                <div class="text-[11px] text-red-300">Konsentrasi PM2.5 & CO melebihi ambang batas EWS. Sirine otomatis & WA Gateway diaktifkan.</div>
+            </div>
+        </div>
+        <button onclick="silenceSiren()" class="px-3 py-1 bg-red-800 border border-red-500 hover:bg-red-700 text-white rounded font-bold">
+            MUTE SIRINE
+        </button>
+    </div>
+
+    <!-- Main SCADA Grid Layout -->
+    <div class="grid grid-cols-12 gap-3">
+        
+        <!-- GIS Map Node Monitor (Left 7 Cols) -->
+        <div class="col-span-12 lg:col-span-7 space-y-3">
+            <div class="scada-panel p-2">
+                <div class="scada-header px-3 py-2 -m-2 mb-2 flex justify-between items-center">
+                    <span class="font-bold text-slate-200 uppercase mono"><i class="fa-solid fa-map-location-dot text-cyan-400 mr-2"></i>GIS Node Telemetry Map (Kalimantan Timur)</span>
+                    <span class="text-slate-400 text-[10px]">Active Nodes: <span class="text-emerald-400 font-bold">3/3</span></span>
+                </div>
+                <div id="map" class="h-[360px] w-full rounded border border-slate-700"></div>
+            </div>
+
+            <!-- Real-time Chart -->
+            <div class="scada-panel p-2">
+                <div class="scada-header px-3 py-2 -m-2 mb-2 flex justify-between items-center">
+                    <span class="font-bold text-slate-200 uppercase mono"><i class="fa-solid fa-chart-line text-amber-400 mr-2"></i>Live Telemetry Stream — <span id="chart-node-label" class="text-cyan-400">Node 01 (Titik A - Karang Joang)</span></span>
+                    <span class="text-slate-400 text-[10px]">Sampling: <span class="mono text-slate-200">1000 ms</span></span>
+                </div>
+                <div class="h-[200px] w-full">
+                    <canvas id="sensorChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sensor Metrics & Controls (Right 5 Cols) -->
+        <div class="col-span-12 lg:col-span-5 space-y-3">
+            
+            <!-- Sensor Telemetry Metrics -->
+            <div class="scada-panel p-3">
+                <div class="scada-header px-3 py-1.5 -m-3 mb-3 flex justify-between items-center">
+                    <span class="font-bold text-slate-200 uppercase mono"><i class="fa-solid fa-microchip text-emerald-400 mr-2"></i>Sensor Readings</span>
+                    <span id="ispu-badge" class="px-2 py-0.5 rounded font-bold text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-700">ISPU: BAIK</span>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">PMS5003 (PM2.5)</div>
+                        <div class="text-xl font-bold mono text-cyan-400" id="val-pm25">12.4 <span class="text-xs text-slate-400">µg/m³</span></div>
+                    </div>
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">MQ-7 (Carbon Monoxide)</div>
+                        <div class="text-xl font-bold mono text-amber-400" id="val-co">4.2 <span class="text-xs text-slate-400">PPM</span></div>
+                    </div>
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">DHT22 (Suhu Lingkungan)</div>
+                        <div class="text-xl font-bold mono text-rose-400" id="val-temp">29.8 <span class="text-xs text-slate-400">°C</span></div>
+                    </div>
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">DHT22 (Kelembapan)</div>
+                        <div class="text-xl font-bold mono text-blue-400" id="val-hum">78.0 <span class="text-xs text-slate-400">%</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Off-Grid Solar Power Subsystem -->
+            <div class="scada-panel p-3">
+                <div class="scada-header px-3 py-1.5 -m-3 mb-3 flex justify-between items-center">
+                    <span class="font-bold text-slate-200 uppercase mono"><i class="fa-solid fa-solar-panel text-yellow-400 mr-2"></i>Solar Off-Grid Power System</span>
+                    <span class="text-emerald-400 font-bold mono text-[10px]" id="val-pv-status">CHARGING</span>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2 text-center">
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">Tegangan PV</div>
+                        <div class="text-sm font-bold mono text-yellow-400" id="val-pv-v">18.4 V</div>
+                    </div>
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">Arus Panel</div>
+                        <div class="text-sm font-bold mono text-emerald-400" id="val-pv-i">1.25 A</div>
+                    </div>
+                    <div class="p-2 bg-slate-900 border border-slate-800 rounded">
+                        <div class="text-slate-400 text-[10px]">Baterai LiFePO4</div>
+                        <div class="text-sm font-bold mono text-cyan-400" id="val-bat-soc">94 %</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Serial MQTT Raw Console Log -->
+            <div class="scada-panel p-3">
+                <div class="scada-header px-3 py-1.5 -m-3 mb-2 flex justify-between items-center">
+                    <span class="font-bold text-slate-200 uppercase mono"><i class="fa-solid fa-terminal text-slate-400 mr-2"></i>MQTT Payload Stream</span>
+                    <button onclick="clearLogs()" class="text-[10px] text-slate-400 hover:text-slate-200">Clear Console</button>
+                </div>
+                <div id="mqtt-console" class="h-[140px] bg-black p-2 font-mono text-[10px] text-emerald-400 overflow-y-auto rounded border border-slate-800 space-y-1">
+                    <div>[SYSTEM INITIALIZED] Listening on topic: /smokeshield/+/telemetry</div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // Node Coordinates (Kaltim)
+        const nodes = {
+            'Titik A': { name: 'Node 01 (Titik A - Karang Joang ITK)', lat: -1.1512, lng: 116.8624, pm25: 12.4, co: 4.2, temp: 29.8, hum: 78 },
+            'Titik B': { name: 'Node 02 (Titik B - Sepinggan Raya)', lat: -1.2653, lng: 116.8921, pm25: 18.1, co: 5.0, temp: 31.0, hum: 72 },
+            'Titik C': { name: 'Node 03 (Titik C - Kutai Taman Nasional)', lat: 0.2241, lng: 117.2718, pm25: 8.5, co: 2.1, temp: 28.2, hum: 84 }
+        };
+
+        let selectedNode = 'Titik A';
+        let fireSimActive = false;
+        let audioCtx = null;
+        let sirenOsc1 = null, sirenOsc2 = null;
+        let sirenInterval = null;
+        let audioEnabled = false;
+
+        // Initialize Map
+        const map = L.map('map').setView([-1.1512, 116.8624], 9);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        const markers = {};
+        Object.keys(nodes).forEach(key => {
+            const n = nodes[key];
+            const marker = L.marker([n.lat, n.lng]).addTo(map);
+            marker.bindPopup(`<b>${n.name}</b><br>PM2.5: ${n.pm25} µg/m³<br>CO: ${n.co} PPM`);
+            marker.on('click', () => selectNode(key));
+            markers[key] = marker;
+        });
+
+        // Initialize Chart
+        const ctx = document.getElementById('sensorChart').getContext('2d');
+        const chartData = {
+            labels: [],
+            datasets: [
+                { label: 'PM2.5 (µg/m³)', borderColor: '#22d3ee', data: [], borderWidth: 1.5, pointRadius: 0 },
+                { label: 'CO (PPM)', borderColor: '#fbbf24', data: [], borderWidth: 1.5, pointRadius: 0 },
+                { label: 'Suhu (°C)', borderColor: '#f43f5e', data: [], borderWidth: 1.5, pointRadius: 0 }
+            ]
+        };
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: chartData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } },
+                    y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } }
+                },
+                plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10 } } } }
+            }
+        });
+
+        function selectNode(key) {
+            selectedNode = key;
+            document.getElementById('chart-node-label').innerText = nodes[key].name;
+            updateConsole(`[NODE SWITCH] Active view: ${nodes[key].name}`);
+        }
+
+        // Web Audio API Siren Generator
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            audioEnabled = true;
+            document.getElementById('btn-audio').innerHTML = `<i class="fa-solid fa-volume-high text-emerald-400"></i><span>Audio Sirine Ready</span>`;
+            updateConsole(`[AUDIO] Web Audio API context initialized.`);
+        }
+
+        function toggleAudio() {
+            initAudio();
+        }
+
+        function startSirenAudio() {
+            if (!audioCtx || !audioEnabled) return;
+            if (sirenOsc1) return; // Already playing
+
+            sirenOsc1 = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            sirenOsc1.type = 'sawtooth';
+            sirenOsc1.frequency.setValueAtTime(800, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+
+            sirenOsc1.connect(gain);
+            gain.connect(audioCtx.destination);
+            sirenOsc1.start();
+
+            let high = false;
+            sirenInterval = setInterval(() => {
+                if (sirenOsc1) {
+                    sirenOsc1.frequency.setValueAtTime(high ? 800 : 1200, audioCtx.currentTime);
+                    high = !high;
+                }
+            }, 350);
+        }
+
+        function silenceSiren() {
+            if (sirenOsc1) {
+                sirenOsc1.stop();
+                sirenOsc1.disconnect();
+                sirenOsc1 = null;
+            }
+            if (sirenInterval) clearInterval(sirenInterval);
+            updateConsole(`[ALARM] Siren muted by user operator.`);
+        }
+
+        function triggerFireSimulation(targetKey) {
+            fireSimActive = true;
+            selectNode(targetKey);
+
+            nodes[targetKey].pm25 = 385.0;
+            nodes[targetKey].co = 112.5;
+            nodes[targetKey].temp = 58.4;
+            nodes[targetKey].hum = 22.0;
+
+            document.getElementById('alarm-banner').classList.remove('hidden');
+            document.getElementById('status-indicator').className = 'w-3 h-3 rounded-full bg-red-500 animate-ping';
+
+            updateConsole(`[CRITICAL EWS] Fire detected at ${targetKey}! PM2.5 > 300, CO > 100.`);
+            updateConsole(`[WA GATEWAY] Dispatching alert message to BPBD Balikpapan...`);
+
+            if (audioEnabled) {
+                startSirenAudio();
+            }
+        }
+
+        function resetSystem() {
+            fireSimActive = false;
+            silenceSiren();
+
+            nodes['Titik A'] = { name: 'Node 01 (Titik A - Karang Joang ITK)', lat: -1.1512, lng: 116.8624, pm25: 12.4, co: 4.2, temp: 29.8, hum: 78 };
+            
+            document.getElementById('alarm-banner').classList.add('hidden');
+            document.getElementById('status-indicator').className = 'w-3 h-3 rounded-full bg-emerald-500 animate-ping';
+            
+            updateConsole(`[SYSTEM] Telemetry reset to normal baseline conditions.`);
+        }
+
+        function updateConsole(msg) {
+            const consoleEl = document.getElementById('mqtt-console');
+            const time = new Date().toISOString().split('T')[1].slice(0, 8);
+            const line = document.createElement('div');
+            line.innerHTML = `<span class="text-slate-500">[${time}]</span> ${msg}`;
+            consoleEl.appendChild(line);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('mqtt-console').innerHTML = '';
+        }
+
+        // Main Simulation Loop
+        setInterval(() => {
+            const curr = nodes[selectedNode];
+
+            if (!fireSimActive) {
+                curr.pm25 = +(curr.pm25 + (Math.random() - 0.48) * 0.5).toFixed(1);
+                curr.co = +(curr.co + (Math.random() - 0.48) * 0.2).toFixed(1);
+                curr.temp = +(curr.temp + (Math.random() - 0.5) * 0.1).toFixed(1);
+            } else {
+                curr.pm25 = +(curr.pm25 + (Math.random() - 0.3) * 2.0).toFixed(1);
+                curr.co = +(curr.co + (Math.random() - 0.3) * 1.5).toFixed(1);
+            }
+
+            document.getElementById('val-pm25').innerText = curr.pm25;
+            document.getElementById('val-co').innerText = curr.co;
+            document.getElementById('val-temp').innerText = curr.temp;
+            document.getElementById('val-hum').innerText = curr.hum;
+
+            // ISPU Calculation Badge
+            const ispuBadge = document.getElementById('ispu-badge');
+            if (curr.pm25 > 250) {
+                ispuBadge.className = 'px-2 py-0.5 rounded font-bold text-[10px] bg-red-950 text-red-400 border border-red-700';
+                ispuBadge.innerText = 'ISPU: BAHAYA';
+            } else if (curr.pm25 > 150) {
+                ispuBadge.className = 'px-2 py-0.5 rounded font-bold text-[10px] bg-amber-950 text-amber-400 border border-amber-700';
+                ispuBadge.innerText = 'ISPU: SANGAT TIDAK SEHAT';
+            } else {
+                ispuBadge.className = 'px-2 py-0.5 rounded font-bold text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-700';
+                ispuBadge.innerText = 'ISPU: BAIK';
+            }
+
+            // Update Chart Data
+            const timeLabel = new Date().toLocaleTimeString('id-ID');
+            if (chartData.labels.length > 20) {
+                chartData.labels.shift();
+                chartData.datasets[0].data.shift();
+                chartData.datasets[1].data.shift();
+                chartData.datasets[2].data.shift();
+            }
+            chartData.labels.push(timeLabel);
+            chartData.datasets[0].data.push(curr.pm25);
+            chartData.datasets[1].data.push(curr.co);
+            chartData.datasets[2].data.push(curr.temp);
+            chart.update();
+
+            // MQTT Telemetry Log Stream
+            const topic = `/smokeshield/${selectedNode.toLowerCase().replace(' ', '')}/telemetry`;
+            const payload = JSON.stringify({ node: selectedNode, pm25: curr.pm25, co: curr.co, temp: curr.temp });
+            updateConsole(`<span class="text-cyan-400">PUB</span> ${topic} -> ${payload}`);
+
+        }, 1200);
+    </script>
+</body>
+</html>
